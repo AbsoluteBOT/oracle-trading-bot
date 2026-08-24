@@ -13,10 +13,17 @@ class RiskManager:
     @staticmethod
     def normalize_symbol(symbol: str) -> str:
         """
-        Normaliza símbolos de TradingView (ej: 'BTC/USDT', 'BTCUSDT', 'BTC/USDT:USDT')
-        al formato estándar de CCXT Binance Futuros USDT-M ('BTC/USDT:USDT' o 'BTC/USDT').
+        Normaliza símbolos de TradingView (ej: 'BYBIT:BTCUSDT', 'BTC/USDT', 'BTCUSDT.P', 'BTC/USDT:USDT')
+        al formato estándar de CCXT ('BTC/USDT:USDT' o 'BTC/USDT').
         """
         sym = symbol.strip().upper()
+
+        # Si viene con prefijo de exchange de TradingView (ej: BYBIT:BTCUSDT -> BTCUSDT)
+        if ":" in sym and not sym.endswith(":USDT"):
+            parts = sym.split(":")
+            if len(parts) == 2 and "/" not in parts[0]:
+                sym = parts[1]
+
         if sym.endswith(".P"):
             sym = sym[:-2]  # Elimina extensión de TradingView como BTCUSDT.P
 
@@ -29,6 +36,7 @@ class RiskManager:
             sym = f"{sym}:USDT"
 
         return sym
+
 
     @staticmethod
     def calculate_position_size(

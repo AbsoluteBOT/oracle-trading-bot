@@ -1,11 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, status, Request
 from pydantic import BaseModel, Field, field_validator
 
-from config import settings
+from config import settings, update_settings_in_memory_and_env
 from exchange_client import exchange_client
 from telegram_notifier import notifier
 
@@ -35,12 +35,25 @@ class WebhookPayload(BaseModel):
         return v.strip()
 
 
+class ConfigUpdateRequest(BaseModel):
+    """
+    Modelo de validación Pydantic para actualización de parámetros desde la GUI.
+    """
+    exchange: Optional[str] = Field(None, description="Nombre del exchange (ej: bybit, binance, okx)")
+    risk_percent: Optional[float] = Field(None, ge=0.1, le=100.0, description="% del balance por posición")
+    default_leverage: Optional[int] = Field(None, ge=1, le=125, description="Apalancamiento")
+    stop_loss_percent: Optional[float] = Field(None, ge=0.0, description="% Stop Loss")
+    take_profit_percent: Optional[float] = Field(None, ge=0.0, description="% Take Profit")
+    margin_mode: Optional[str] = Field(None, description="Modo de margen: ISOLATED o CROSSED")
+    exchange_testnet: Optional[bool] = Field(None, description="Modo testnet")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Ciclo de vida del servidor FastAPI: Inicializa CCXT al arrancar y cierra conexiones al apagar.
     """
-    logger.info("🚀 Iniciando Bot de Trading Automatizado...")
+    logger.info(f"🚀 Iniciando Bot de Trading Multi-Exchange ({settings.EXCHANGE.upper()})...")
     try:
         await exchange_client.initialize()
     except Exception as e:
@@ -53,9 +66,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="TradingView Webhook Bot para Binance Futuros",
-    description="Bot de Trading Automatizado de producción completa en Binance Futuros (USDT-M)",
-    version="1.0.0",
+    title="TradingView Webhook Bot Multi-Exchange",
+    description="Bot de Trading Automatizado de producción completa compatible con Bybit, Binance y más",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -64,15 +77,71 @@ app = FastAPI(
 async def root():
     return {
         "status": "online",
-        "bot": "Binance Futures TradingView Webhook Bot",
-        "version": "1.0.0",
-        "testnet": settings.BINANCE_TESTNET
+        "bot": "Oracle TradingView Webhook Bot Multi-Exchange",
+        "version": "2.0.0",
+        "exchange": settings.EXCHANGE,
+        "testnet": settings.is_testnet,
+        "risk_percent": settings.RISK_PERCENT,
+        "leverage": settings.DEFAULT_LEVERAGE,
+        "stop_loss_percent": settings.STOP_LOSS_PERCENT,
+        "take_profit_percent": settings.TAKE_PROFIT_PERCENT
     }
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "exchange": settings.EXCHANGE}
+
+
+@app.get("/api/config")
+async def get_config():
+    """
+    Endpoint para obtener los parámetros de configuración actuales del bot (usado por la GUI).
+    """
+    return {
+        "exchange": settings.EXCHANGE,
+        "risk_percent": settings.RISK_PERCENT,
+        "default_leverage": settings.DEFAULT_LEVERAGE,
+        "stop_loss_percent": settings.STOP_LOSS_PERCENT,
+        "take_profit_percent": settings.TAKE_PROFIT_PERCENT,
+        "margin_mode": settings.MARGIN_MODE,
+        "exchange_testnet": settings.is_testnet,
+        "has_api_key": bool(settings.active_api_key)
+    }
+
+
+@app.post("/api/config")
+async def update_config(payload: ConfigUpdateRequest):
+    """
+    Endpoint para actualizar los parámetros en tiempo real desde la GUI y persistir en .env.
+    """
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        return {"success": False, "message": "No se recibieron parámetros para actualizar."}
+
+    updated_fields = update_settings_in_memory_and_env(updates)
+
+    # Si se actualizó el exchange o testnet, re-inicializar la conexión de CCXT
+    if "EXCHANGE" in updated_fields or "EXCHANGE_TESTNET" in updated_fields:
+        try:
+            await exchange_client.initialize(force_reinit=True)
+        except Exception as e:
+            logger.error(f"Error re-inicializando cliente de exchange: {e}")
+
+    return {
+        "success": True,
+        "message": "Configuración actualizada y guardada exitosamente en .env",
+        "updated_fields": updated_fields,
+        "current_config": {
+            "exchange": settings.EXCHANGE,
+            "risk_percent": settings.RISK_PERCENT,
+            "default_leverage": settings.DEFAULT_LEVERAGE,
+            "stop_loss_percent": settings.STOP_LOSS_PERCENT,
+            "take_profit_percent": settings.TAKE_PROFIT_PERCENT,
+            "margin_mode": settings.MARGIN_MODE,
+            "exchange_testnet": settings.is_testnet
+        }
+    }
 
 
 @app.post("/webhook")
@@ -96,13 +165,15 @@ async def handle_webhook(payload: WebhookPayload, request: Request):
             detail=error_msg
         )
 
-    # 2. Procesar Orden en Binance Futuros
+    # 2. Procesar Orden en el Exchange activo
     try:
         result = await exchange_client.process_signal(
             action=payload.action,
             symbol=payload.symbol,
             price=payload.price
         )
+
+        ex_name = (result.get("exchange") or settings.EXCHANGE).upper()
 
         # 3. Notificar a Telegram si fue exitosa
         if result.get("status") == "success":
@@ -116,11 +187,11 @@ async def handle_webhook(payload: WebhookPayload, request: Request):
                 margin_mode=result["margin_mode"],
                 sl_price=result.get("sl_price"),
                 tp_price=result.get("tp_price"),
-                status="Exitosa"
+                status=f"Exitosa ({ex_name})"
             )
         elif result.get("status") == "closed":
             await notifier.send_message(
-                f"🟡 **POSICIÓN CERRADA EN BINANCE FUTUROS**\n"
+                f"🟡 **POSICIÓN CERRADA EN {ex_name}**\n"
                 f"- Símbolo: `{result['symbol']}`\n"
                 f"- Status: **Exitosa**"
             )
@@ -136,16 +207,17 @@ async def handle_webhook(payload: WebhookPayload, request: Request):
         
         # Enviar alerta inmediata a Telegram ante cualquier fallo
         await notifier.send_error_notification(
-            error_msg=f"Error en {payload.action.upper()}: {error_detail}",
+            error_msg=f"Error en {payload.action.upper()} ({settings.EXCHANGE.upper()}): {error_detail}",
             symbol=payload.symbol
         )
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Fallo al ejecutar orden en Binance: {error_detail}"
+            detail=f"Fallo al ejecutar orden en {settings.EXCHANGE.upper()}: {error_detail}"
         )
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+

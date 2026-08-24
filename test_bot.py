@@ -10,18 +10,21 @@ from telegram_notifier import TelegramNotifier
 
 class TestTradingBot(unittest.TestCase):
     """
-    Pruebas unitarias para verificar la gestión de riesgo, validación de webhook y notificaciones.
+    Pruebas unitarias para verificar la gestión de riesgo, validación de webhook,
+    normalización multi-exchange y API de configuración GUI.
     """
 
     def setUp(self):
         self.client = TestClient(app)
 
     def test_symbol_normalization(self):
-        """Prueba la normalización de símbolos recibidos de TradingView."""
+        """Prueba la normalización de símbolos recibidos de TradingView (incluyendo Bybit)."""
         self.assertEqual(risk_manager.normalize_symbol("BTC/USDT"), "BTC/USDT:USDT")
         self.assertEqual(risk_manager.normalize_symbol("BTCUSDT"), "BTC/USDT:USDT")
         self.assertEqual(risk_manager.normalize_symbol("ETHUSDT.P"), "ETH/USDT:USDT")
         self.assertEqual(risk_manager.normalize_symbol("SOL/USDT:USDT"), "SOL/USDT:USDT")
+        self.assertEqual(risk_manager.normalize_symbol("BYBIT:BTCUSDT"), "BTC/USDT:USDT")
+        self.assertEqual(risk_manager.normalize_symbol("BINANCE:ETHUSDT.P"), "ETH/USDT:USDT")
 
     def test_risk_manager_position_calculation(self):
         """Prueba el cálculo cuantitativo del tamaño de posición."""
@@ -75,6 +78,32 @@ class TestTradingBot(unittest.TestCase):
         }
         response = self.client.post("/webhook", json=payload)
         self.assertEqual(response.status_code, 422)  # Unprocessable Entity de Pydantic
+
+    def test_api_config_get_and_post(self):
+        """Prueba la obtención y actualización de parámetros vía API REST (para la GUI)."""
+        # 1. GET /api/config
+        get_res = self.client.get("/api/config")
+        self.assertEqual(get_res.status_code, 200)
+        config_data = get_res.json()
+        self.assertIn("exchange", config_data)
+        self.assertIn("risk_percent", config_data)
+        self.assertIn("default_leverage", config_data)
+
+        # 2. POST /api/config
+        update_payload = {
+            "exchange": "bybit",
+            "risk_percent": 3.5,
+            "default_leverage": 10,
+            "stop_loss_percent": 2.0,
+            "take_profit_percent": 5.0
+        }
+        post_res = self.client.post("/api/config", json=update_payload)
+        self.assertEqual(post_res.status_code, 200)
+        post_data = post_res.json()
+        self.assertTrue(post_data.get("success"))
+        self.assertEqual(settings.EXCHANGE, "bybit")
+        self.assertEqual(settings.RISK_PERCENT, 3.5)
+        self.assertEqual(settings.DEFAULT_LEVERAGE, 10)
 
 
 if __name__ == "__main__":

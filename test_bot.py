@@ -26,22 +26,42 @@ class TestTradingBot(unittest.TestCase):
         self.assertEqual(risk_manager.normalize_symbol("BYBIT:BTCUSDT"), "BTC/USDT:USDT")
         self.assertEqual(risk_manager.normalize_symbol("BINANCE:ETHUSDT.P"), "ETH/USDT:USDT")
 
-    def test_risk_manager_position_calculation(self):
-        """Prueba el cálculo cuantitativo del tamaño de posición."""
-        # Balance = 1000 USDT, Risk = 2%, Leverage = 5x, Price = $50,000
-        # Margin Allocated = 20 USDT
-        # Notional Value = 100 USDT
-        # Raw Quantity = 100 / 50000 = 0.002 BTC
+    def test_risk_manager_position_calculation_by_sl(self):
+        """
+        Prueba el cálculo de posición por Stop Loss:
+        Balance = 200 USDT, Risk % = 7.5% ($15 USDT arriesgados), SL = 2.0% (0.02)
+        Nocional exacto = $15 / 0.02 = $750 USDT.
+        """
         res = risk_manager.calculate_position_size(
-            usdt_balance=1000.0,
-            risk_percent=2.0,
+            usdt_balance=200.0,
+            risk_percent=7.5,
             leverage=5,
-            current_price=50000.0
+            current_price=50000.0,
+            sl_percent=2.0
         )
         self.assertTrue(res["is_valid"])
-        self.assertAlmostEqual(res["margin_allocated"], 20.0)
-        self.assertAlmostEqual(res["notional_value"], 100.0)
-        self.assertAlmostEqual(res["quantity"], 0.002)
+        self.assertAlmostEqual(res["risk_amount"], 15.0)
+        self.assertAlmostEqual(res["notional_value"], 750.0)
+        self.assertAlmostEqual(res["quantity"], 0.015)
+
+    def test_risk_manager_auto_adjust_min_qty(self):
+        """
+        Prueba que si la cantidad calculada es menor al mínimo del exchange (ej: 0.01 ETH),
+        se ajuste automáticamente al mínimo permitido en lugar de fallar o cancelar.
+        """
+        market_limits = {"limits": {"amount": {"min": 0.01}, "cost": {"min": 5.0}}}
+        res = risk_manager.calculate_position_size(
+            usdt_balance=10.0,
+            risk_percent=0.1,
+            leverage=5,
+            current_price=3000.0,
+            market_limits=market_limits,
+            sl_percent=5.0
+        )
+        self.assertTrue(res["is_valid"])
+        self.assertEqual(res["quantity"], 0.01)
+        self.assertAlmostEqual(res["notional_value"], 30.0)
+
 
     def test_sl_tp_calculation(self):
         """Prueba el cálculo de niveles de Stop Loss y Take Profit."""

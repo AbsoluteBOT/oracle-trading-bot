@@ -312,17 +312,19 @@ class UniversalExchangeClient:
             risk_percent=risk_pct,
             leverage=lev,
             current_price=entry_price,
-            market_limits=market_info
+            market_limits=market_info,
+            sl_percent=settings.STOP_LOSS_PERCENT
         )
 
         if not risk_result["is_valid"]:
             raise ValueError(f"Riesgo/Posición Inválida: {risk_result['reason']}")
 
         raw_qty = risk_result["quantity"]
+        min_qty = risk_result.get("min_qty", 0.001)
         amount_formatted = float(self.exchange.amount_to_precision(norm_symbol, raw_qty))
+        if amount_formatted < min_qty:
+            amount_formatted = min_qty
 
-        if amount_formatted <= 0:
-            raise ValueError(f"Cantidad formateada ({amount_formatted}) insuficiente para el lote mínimo.")
 
         # 6. Ejecutar orden a MERCADO
         order_side = 'buy' if action_clean == 'buy' else 'sell'

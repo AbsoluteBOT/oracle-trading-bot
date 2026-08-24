@@ -7,7 +7,7 @@ logger = logging.getLogger("risk_manager")
 class RiskManager:
     """
     Gestor de Riesgo Cuantitativo para la gestión de apalancamiento, cálculo de tamaño
-    de posición y generación de niveles de Stop Loss y Take Profit.
+    de posición por Stop Loss y ajuste automático a mínimos del exchange.
     """
 
     @staticmethod
@@ -37,22 +37,28 @@ class RiskManager:
 
         return sym
 
-
     @staticmethod
     def calculate_position_size(
         usdt_balance: float,
         risk_percent: float,
         leverage: int,
         current_price: float,
-        market_limits: Dict[str, Any] = None
+        market_limits: Dict[str, Any] = None,
+        sl_percent: float = None
     ) -> Dict[str, Any]:
         """
-        Calcula la cantidad de contratos a operar basados en un porcentaje del balance total.
+        Calcula la cantidad de contratos a operar basados en el dinero arriesgado y la distancia del Stop Loss.
         
-        Formula:
-          - Margen Asignado (USDT) = Balance * (Risk % / 100)
-          - Valor Nocional Total (USDT) = Margen Asignado * Apalancamiento
-          - Cantidad de Contratos (Raw Qty) = Valor Nocional / Precio Entrante
+        Formula de Riesgo por Stop Loss:
+          - Dinero Arriesgado (USDT) = usdt_balance * (risk_percent / 100)
+          - Distancia SL = sl_percent / 100  (ej: 2.0% -> 0.02)
+          - Valor Nocional (USDT) = Dinero Arriesgado / Distancia SL
+            Ejemplo: Balance=200 USDT, Risk=7.5% ($15 arriesgados), SL=2.0% (0.02)
+            -> Nocional = 15.0 / 0.02 = $750 USDT Nocionales
+          - Cantidad de Contratos (Raw Qty) = Valor Nocional / Precio Actual
+
+        Si la cantidad calculada es menor al min_amount o min_qty exigido por el exchange,
+        se ajusta automáticamente al mínimo en lugar de cancelarse o redondearse a 0.
         """
         if usdt_balance <= 0 or current_price <= 0:
             return {
@@ -63,45 +69,55 @@ class RiskManager:
                 "notional_value": 0.0
             }
 
-        margin_allocated = usdt_balance * (risk_percent / 100.0)
-        notional_value = margin_allocated * leverage
-        raw_quantity = notional_value / current_price
+        risk_amount = usdt_balance * (risk_percent / 100.0)
 
+        effective_sl = sl_percent if sl_percent is not None and sl_percent > 0 else None
+
+        if effective_sl:
+            sl_distance = effective_sl / 100.0
+            notional_value = risk_amount / sl_distance
+        else:
+            # Fallback si no hay SL especificado
+            margin_allocated_base = risk_amount
+            notional_value = margin_allocated_base * leverage
+
+        raw_quantity = notional_value / current_price
+        margin_allocated = notional_value / leverage if leverage > 0 else notional_value
+
+        # Extraer límites de la exchange (min_qty y min_cost)
         min_qty = 0.001
-        min_cost = 5.0  # Mínimo nocional aproximado en Binance Futuros (5 USDT)
+        min_cost = 5.0
 
         if market_limits:
             amount_limits = market_limits.get("limits", {}).get("amount", {})
             cost_limits = market_limits.get("limits", {}).get("cost", {})
-            if "min" in amount_limits and amount_limits["min"] is not None:
+            if "min" in amount_limits and amount_limits["min"] is not None and float(amount_limits["min"]) > 0:
                 min_qty = float(amount_limits["min"])
-            if "min" in cost_limits and cost_limits["min"] is not None:
+            if "min" in cost_limits and cost_limits["min"] is not None and float(cost_limits["min"]) > 0:
                 min_cost = float(cost_limits["min"])
 
+        # 1. Ajuste automático por min_qty (Mínimo de contratos/monedas)
         if raw_quantity < min_qty:
-            return {
-                "is_valid": False,
-                "reason": f"Cantidad calculada ({raw_quantity:.6f}) menor al mínimo permitido ({min_qty})",
-                "quantity": 0.0,
-                "margin_allocated": margin_allocated,
-                "notional_value": notional_value
-            }
+            logger.info(f"⚠️ Cantidad calculada ({raw_quantity:.6f}) menor al mínimo del exchange ({min_qty}). Ajustando al mínimo.")
+            raw_quantity = min_qty
+            notional_value = raw_quantity * current_price
+            margin_allocated = notional_value / leverage if leverage > 0 else notional_value
 
+        # 2. Ajuste automático por min_cost (Nocional mínimo)
         if notional_value < min_cost:
-            return {
-                "is_valid": False,
-                "reason": f"Valor nocional (${notional_value:.2f}) menor al mínimo permitido por la exchange (${min_cost:.2f} USDT)",
-                "quantity": 0.0,
-                "margin_allocated": margin_allocated,
-                "notional_value": notional_value
-            }
+            logger.info(f"⚠️ Valor nocional (${notional_value:.2f}) menor al costo mínimo del exchange (${min_cost:.2f}). Ajustando al mínimo.")
+            raw_quantity = max(min_qty, min_cost / current_price)
+            notional_value = raw_quantity * current_price
+            margin_allocated = notional_value / leverage if leverage > 0 else notional_value
 
         return {
             "is_valid": True,
             "reason": "OK",
             "quantity": raw_quantity,
             "margin_allocated": margin_allocated,
-            "notional_value": notional_value
+            "notional_value": notional_value,
+            "risk_amount": risk_amount,
+            "min_qty": min_qty
         }
 
     @staticmethod

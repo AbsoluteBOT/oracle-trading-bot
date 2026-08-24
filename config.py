@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     EXCHANGE_PASSWORD: str = ""
     EXCHANGE_TESTNET: bool = True
     
+    # Credenciales específicas de Bybit
+    BYBIT_API_KEY: str = ""
+    BYBIT_SECRET_KEY: str = ""
+    BYBIT_TESTNET: Optional[bool] = None
+
     # Credenciales heredadas de Binance Futuros (Compatibilidad)
     BINANCE_API_KEY: str = ""
     BINANCE_SECRET_KEY: str = ""
@@ -58,19 +63,26 @@ class Settings(BaseSettings):
 
     @property
     def active_api_key(self) -> str:
-        return self.EXCHANGE_API_KEY or self.BINANCE_API_KEY
+        if self.EXCHANGE.lower() == "bybit":
+            return self.BYBIT_API_KEY or self.EXCHANGE_API_KEY or self.BINANCE_API_KEY
+        return self.EXCHANGE_API_KEY or self.BINANCE_API_KEY or self.BYBIT_API_KEY
 
     @property
     def active_secret_key(self) -> str:
-        return self.EXCHANGE_SECRET_KEY or self.BINANCE_SECRET_KEY
+        if self.EXCHANGE.lower() == "bybit":
+            return self.BYBIT_SECRET_KEY or self.EXCHANGE_SECRET_KEY or self.BINANCE_SECRET_KEY
+        return self.EXCHANGE_SECRET_KEY or self.BINANCE_SECRET_KEY or self.BYBIT_SECRET_KEY
 
     @property
     def is_testnet(self) -> bool:
         """
         Retorna True si el modo Testnet está activo, False si es Mainnet/Real.
-        Prioriza EXCHANGE_TESTNET sobre la variable legada BINANCE_TESTNET.
+        Prioriza BYBIT_TESTNET si el exchange es Bybit y está configurado, o EXCHANGE_TESTNET.
         """
+        if self.EXCHANGE.lower() == "bybit" and self.BYBIT_TESTNET is not None:
+            return parse_bool(self.BYBIT_TESTNET)
         return parse_bool(self.EXCHANGE_TESTNET)
+
 
 
 settings = Settings()

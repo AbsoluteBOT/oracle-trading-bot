@@ -42,12 +42,21 @@ class UniversalExchangeClient:
         else:
             raise ValueError(f"El exchange '{target_exchange_id}' no es soportado por CCXT.")
 
+        # Obtener apiKey y secret considerando BYBIT_API_KEY y EXCHANGE_API_KEY
+        if target_exchange_id == 'bybit':
+            api_key = settings.BYBIT_API_KEY or settings.EXCHANGE_API_KEY or settings.active_api_key
+            secret_key = settings.BYBIT_SECRET_KEY or settings.EXCHANGE_SECRET_KEY or settings.active_secret_key
+        else:
+            api_key = settings.active_api_key
+            secret_key = settings.active_secret_key
+
         config_params: Dict[str, Any] = {
-            'apiKey': settings.active_api_key,
-            'secret': settings.active_secret_key,
+            'apiKey': api_key,
+            'secret': secret_key,
             'enableRateLimit': True,
             'options': {}
         }
+
 
         if settings.EXCHANGE_PASSWORD:
             config_params['password'] = settings.EXCHANGE_PASSWORD

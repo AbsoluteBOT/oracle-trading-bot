@@ -124,7 +124,16 @@ class TestTradingBot(unittest.TestCase):
         update_settings_in_memory_and_env({"exchange_testnet": True})
         self.assertTrue(settings.is_testnet)
 
+    def test_bybit_api_key_resolution(self):
+        """Prueba que la resolución de claves lea de BYBIT_API_KEY y BYBIT_SECRET_KEY."""
+        settings.EXCHANGE = "bybit"
+        settings.BYBIT_API_KEY = "test_bybit_key"
+        settings.BYBIT_SECRET_KEY = "test_bybit_secret"
+        self.assertEqual(settings.active_api_key, "test_bybit_key")
+        self.assertEqual(settings.active_secret_key, "test_bybit_secret")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

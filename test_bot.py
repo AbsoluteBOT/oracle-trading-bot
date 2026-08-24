@@ -105,6 +105,26 @@ class TestTradingBot(unittest.TestCase):
         self.assertEqual(settings.RISK_PERCENT, 3.5)
         self.assertEqual(settings.DEFAULT_LEVERAGE, 10)
 
+    def test_boolean_testnet_parsing(self):
+        """Prueba que los valores booleanos de testnet ('False', 'false', False) se parseen correctamente."""
+        from config import parse_bool, update_settings_in_memory_and_env
+        self.assertFalse(parse_bool("False"))
+        self.assertFalse(parse_bool("false"))
+        self.assertFalse(parse_bool("0"))
+        self.assertFalse(parse_bool(False))
+        self.assertTrue(parse_bool("True"))
+        self.assertTrue(parse_bool("true"))
+        self.assertTrue(parse_bool("1"))
+        self.assertTrue(parse_bool(True))
+
+        # Probar actualización de settings
+        update_settings_in_memory_and_env({"exchange_testnet": False})
+        self.assertFalse(settings.is_testnet)
+
+        update_settings_in_memory_and_env({"exchange_testnet": True})
+        self.assertTrue(settings.is_testnet)
+
 
 if __name__ == "__main__":
     unittest.main()
+

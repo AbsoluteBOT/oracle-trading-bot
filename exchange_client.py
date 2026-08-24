@@ -68,6 +68,13 @@ class UniversalExchangeClient:
                 logger.info(f"🧪 Modo Testnet para {target_exchange_id.upper()} ACTIVADO.")
             except Exception as e:
                 logger.warning(f"Nota/Aviso al activar sandbox/testnet en {target_exchange_id}: {e}")
+        else:
+            try:
+                self.exchange.set_sandbox_mode(False)
+            except Exception:
+                pass
+            logger.info(f"🌐 Modo REAL / Mainnet para {target_exchange_id.upper()} ACTIVADO.")
+
 
         try:
             await self.exchange.load_markets()

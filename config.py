@@ -3,6 +3,21 @@ from typing import Optional, Dict, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def parse_bool(val: Any) -> bool:
+    """
+    Convierte seguro cualquier valor (bool, str, int) a booleano real.
+    'False', 'false', '0', 'no', 'off', 0, False -> False
+    'True', 'true', '1', 'yes', 'on', 1, True -> True
+    """
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "t", "yes", "on")
+    return bool(val)
+
+
 class Settings(BaseSettings):
     """
     Configuración global de la aplicación cargada desde variables de entorno o archivo .env.
@@ -51,9 +66,11 @@ class Settings(BaseSettings):
 
     @property
     def is_testnet(self) -> bool:
-        if self.EXCHANGE_API_KEY:
-            return self.EXCHANGE_TESTNET
-        return self.BINANCE_TESTNET
+        """
+        Retorna True si el modo Testnet está activo, False si es Mainnet/Real.
+        Prioriza EXCHANGE_TESTNET sobre la variable legada BINANCE_TESTNET.
+        """
+        return parse_bool(self.EXCHANGE_TESTNET)
 
 
 settings = Settings()
@@ -63,15 +80,13 @@ def update_settings_in_memory_and_env(updates: Dict[str, Any], env_file_path: st
     """
     Actualiza los atributos del objeto global 'settings' en memoria y los persiste en el archivo .env.
     """
-    # 1. Actualizar atributos en el objeto settings
     updated_fields = {}
     for key, value in updates.items():
         key_upper = key.upper()
         if hasattr(settings, key_upper):
-            # Casting según el tipo del atributo existente
             current_val = getattr(settings, key_upper)
-            if isinstance(current_val, bool):
-                new_val = bool(value)
+            if isinstance(current_val, bool) or key_upper in ["EXCHANGE_TESTNET", "BINANCE_TESTNET"]:
+                new_val = parse_bool(value)
             elif isinstance(current_val, int):
                 new_val = int(value)
             elif isinstance(current_val, float):
@@ -125,4 +140,3 @@ def update_settings_in_memory_and_env(updates: Dict[str, Any], env_file_path: st
         f.writelines(new_lines)
 
     return updated_fields
-

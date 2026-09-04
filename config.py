@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     BINANCE_TESTNET: bool = True
     
     # Parámetros de Trading y Riesgo
+    MAX_OPEN_POSITIONS: int = 2    # Límite de posiciones abiertas simultáneas
     DEFAULT_LEVERAGE: int = 5
     MARGIN_MODE: str = "ISOLATED"  # ISOLATED o CROSSED
     RISK_PERCENT: float = 2.0      # % del balance total por posición

@@ -40,6 +40,7 @@ class ConfigUpdateRequest(BaseModel):
     Modelo de validación Pydantic para actualización de parámetros desde la GUI.
     """
     exchange: Optional[str] = Field(None, description="Nombre del exchange (ej: bybit, binance, okx)")
+    max_open_positions: Optional[int] = Field(None, ge=1, le=50, description="Límite máximo de posiciones abiertas")
     risk_percent: Optional[float] = Field(None, ge=0.1, le=100.0, description="% del balance por posición")
     default_leverage: Optional[int] = Field(None, ge=1, le=125, description="Apalancamiento")
     stop_loss_percent: Optional[float] = Field(None, ge=0.0, description="% Stop Loss")
@@ -81,6 +82,7 @@ async def root():
         "version": "2.0.0",
         "exchange": settings.EXCHANGE,
         "testnet": settings.is_testnet,
+        "max_open_positions": settings.MAX_OPEN_POSITIONS,
         "risk_percent": settings.RISK_PERCENT,
         "leverage": settings.DEFAULT_LEVERAGE,
         "stop_loss_percent": settings.STOP_LOSS_PERCENT,
@@ -100,6 +102,7 @@ async def get_config():
     """
     return {
         "exchange": settings.EXCHANGE,
+        "max_open_positions": settings.MAX_OPEN_POSITIONS,
         "risk_percent": settings.RISK_PERCENT,
         "default_leverage": settings.DEFAULT_LEVERAGE,
         "stop_loss_percent": settings.STOP_LOSS_PERCENT,
@@ -134,6 +137,7 @@ async def update_config(payload: ConfigUpdateRequest):
         "updated_fields": updated_fields,
         "current_config": {
             "exchange": settings.EXCHANGE,
+            "max_open_positions": settings.MAX_OPEN_POSITIONS,
             "risk_percent": settings.RISK_PERCENT,
             "default_leverage": settings.DEFAULT_LEVERAGE,
             "stop_loss_percent": settings.STOP_LOSS_PERCENT,
@@ -175,7 +179,7 @@ async def handle_webhook(payload: WebhookPayload, request: Request):
 
         ex_name = (result.get("exchange") or settings.EXCHANGE).upper()
 
-        # 3. Notificar a Telegram si fue exitosa
+        # 3. Notificar a Telegram según el resultado
         if result.get("status") == "success":
             await notifier.send_trade_notification(
                 symbol=result["symbol"],
@@ -190,11 +194,15 @@ async def handle_webhook(payload: WebhookPayload, request: Request):
                 status=f"Exitosa ({ex_name})"
             )
         elif result.get("status") == "closed":
+            act_info = result.get("action", "close").upper()
             await notifier.send_message(
                 f"🟡 **POSICIÓN CERRADA EN {ex_name}**\n"
                 f"- Símbolo: `{result['symbol']}`\n"
+                f"- Acción: `{act_info}`\n"
                 f"- Status: **Exitosa**"
             )
+        elif result.get("status") == "skipped":
+            logger.info(f"ℹ️ Orden omitida para {result.get('symbol')}: {result.get('reason')}")
 
         return {
             "success": True,

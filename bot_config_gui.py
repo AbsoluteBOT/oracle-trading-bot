@@ -21,7 +21,7 @@ class BotConfigApp(tk.Tk):
         super().__init__()
 
         self.title("Oracle Trading Bot - Panel de Configuración")
-        self.geometry("480x580")
+        self.geometry("480x630")
         self.resizable(False, False)
 
         # Estilos modernos
@@ -50,6 +50,7 @@ class BotConfigApp(tk.Tk):
         # Variables de control
         self.var_bot_url = tk.StringVar(value=DEFAULT_BOT_URL)
         self.var_exchange = tk.StringVar(value=settings.EXCHANGE)
+        self.var_max_pos = tk.StringVar(value=str(settings.MAX_OPEN_POSITIONS))
         self.var_risk = tk.StringVar(value=str(settings.RISK_PERCENT))
         self.var_leverage = tk.StringVar(value=str(settings.DEFAULT_LEVERAGE))
         self.var_tp = tk.StringVar(value=str(settings.TAKE_PROFIT_PERCENT))
@@ -85,7 +86,7 @@ class BotConfigApp(tk.Tk):
 
         row = 0
         # 1. Exchange
-        ttk.Label(form_frame, text="Exchange (Broker):").grid(row=row, column=0, sticky=tk.W, pady=6)
+        ttk.Label(form_frame, text="Exchange (Broker):").grid(row=row, column=0, sticky=tk.W, pady=5)
         ex_combo = ttk.Combobox(
             form_frame,
             textvariable=self.var_exchange,
@@ -93,31 +94,36 @@ class BotConfigApp(tk.Tk):
             state="readonly",
             width=18
         )
-        ex_combo.grid(row=row, column=1, sticky=tk.E, pady=6)
+        ex_combo.grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 2. % de Cartera
-        ttk.Label(form_frame, text="% de Cartera a Usar (Riesgo):").grid(row=row, column=0, sticky=tk.W, pady=6)
-        ttk.Entry(form_frame, textvariable=self.var_risk, width=20).grid(row=row, column=1, sticky=tk.E, pady=6)
+        # 2. Max Posiciones Abiertas
+        ttk.Label(form_frame, text="Máx. Posiciones Abiertas:").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.var_max_pos, width=20).grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 3. Apalancamiento (Leverage)
-        ttk.Label(form_frame, text="Apalancamiento (Leverage x):").grid(row=row, column=0, sticky=tk.W, pady=6)
-        ttk.Entry(form_frame, textvariable=self.var_leverage, width=20).grid(row=row, column=1, sticky=tk.E, pady=6)
+        # 3. % de Cartera
+        ttk.Label(form_frame, text="% de Cartera a Usar (Riesgo):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.var_risk, width=20).grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 4. Take Profit %
-        ttk.Label(form_frame, text="Take Profit (%):").grid(row=row, column=0, sticky=tk.W, pady=6)
-        ttk.Entry(form_frame, textvariable=self.var_tp, width=20).grid(row=row, column=1, sticky=tk.E, pady=6)
+        # 4. Apalancamiento (Leverage)
+        ttk.Label(form_frame, text="Apalancamiento (Leverage x):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.var_leverage, width=20).grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 5. Stop Loss %
-        ttk.Label(form_frame, text="Stop Loss (%):").grid(row=row, column=0, sticky=tk.W, pady=6)
-        ttk.Entry(form_frame, textvariable=self.var_sl, width=20).grid(row=row, column=1, sticky=tk.E, pady=6)
+        # 5. Take Profit %
+        ttk.Label(form_frame, text="Take Profit (%):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.var_tp, width=20).grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 6. Modo de Margen
-        ttk.Label(form_frame, text="Modo de Margen:").grid(row=row, column=0, sticky=tk.W, pady=6)
+        # 6. Stop Loss %
+        ttk.Label(form_frame, text="Stop Loss (%):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(form_frame, textvariable=self.var_sl, width=20).grid(row=row, column=1, sticky=tk.E, pady=5)
+
+        row += 1
+        # 7. Modo de Margen
+        ttk.Label(form_frame, text="Modo de Margen:").grid(row=row, column=0, sticky=tk.W, pady=5)
         margin_combo = ttk.Combobox(
             form_frame,
             textvariable=self.var_margin,
@@ -125,12 +131,12 @@ class BotConfigApp(tk.Tk):
             state="readonly",
             width=18
         )
-        margin_combo.grid(row=row, column=1, sticky=tk.E, pady=6)
+        margin_combo.grid(row=row, column=1, sticky=tk.E, pady=5)
 
         row += 1
-        # 7. Modo Testnet
-        ttk.Label(form_frame, text="Modo Testnet (Pruebas):").grid(row=row, column=0, sticky=tk.W, pady=6)
-        ttk.Checkbutton(form_frame, text="Activo", variable=self.var_testnet).grid(row=row, column=1, sticky=tk.E, pady=6)
+        # 8. Modo Testnet
+        ttk.Label(form_frame, text="Modo Testnet (Pruebas):").grid(row=row, column=0, sticky=tk.W, pady=5)
+        ttk.Checkbutton(form_frame, text="Activo", variable=self.var_testnet).grid(row=row, column=1, sticky=tk.E, pady=5)
 
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
 
@@ -159,6 +165,7 @@ class BotConfigApp(tk.Tk):
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     self.var_exchange.set(data.get("exchange", "bybit"))
+                    self.var_max_pos.set(str(data.get("max_open_positions", 2)))
                     self.var_risk.set(str(data.get("risk_percent", 2.0)))
                     self.var_leverage.set(str(data.get("default_leverage", 5)))
                     self.var_tp.set(str(data.get("take_profit_percent", 3.0)))
@@ -170,6 +177,7 @@ class BotConfigApp(tk.Tk):
         except Exception as e:
             # Fallback a lectura de archivo local .env
             self.var_exchange.set(settings.EXCHANGE)
+            self.var_max_pos.set(str(settings.MAX_OPEN_POSITIONS))
             self.var_risk.set(str(settings.RISK_PERCENT))
             self.var_leverage.set(str(settings.DEFAULT_LEVERAGE))
             self.var_tp.set(str(settings.TAKE_PROFIT_PERCENT))
@@ -181,6 +189,7 @@ class BotConfigApp(tk.Tk):
     def save_config(self):
         """Valida y envía los nuevos parámetros al bot y actualiza .env"""
         try:
+            max_pos = int(self.var_max_pos.get())
             risk = float(self.var_risk.get())
             leverage = int(self.var_leverage.get())
             tp = float(self.var_tp.get())
@@ -189,6 +198,8 @@ class BotConfigApp(tk.Tk):
             margin = self.var_margin.get().strip().upper()
             testnet = bool(self.var_testnet.get())
 
+            if max_pos < 1 or max_pos > 50:
+                raise ValueError("El máximo de posiciones debe ser entre 1 y 50.")
             if risk <= 0 or risk > 100:
                 raise ValueError("El % de cartera debe estar entre 0.1 y 100.")
             if leverage < 1 or leverage > 125:
@@ -202,6 +213,7 @@ class BotConfigApp(tk.Tk):
 
         payload_dict = {
             "exchange": exchange,
+            "max_open_positions": max_pos,
             "risk_percent": risk,
             "default_leverage": leverage,
             "take_profit_percent": tp,

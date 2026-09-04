@@ -77,7 +77,7 @@ class TelegramNotifier:
         tp_str = f"${tp_price:,.2f}" if tp_price else "N/A"
 
         message = (
-            f"{icon} **ORDEN EJECUTADA EN BINANCE FUTUROS**\n"
+            f"{icon} **ORDEN EJECUTADA EN {settings.EXCHANGE.upper()} FUTUROS**\n"
             f"- Símbolo: `{symbol}`\n"
             f"- Acción: {action_desc}\n"
             f"- Precio Entrada: `${entry_price:,.2f}`\n"

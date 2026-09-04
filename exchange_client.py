@@ -1,9 +1,10 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import ccxt.async_support as ccxt
 
 from config import settings
 from risk_manager import risk_manager
+from telegram_notifier import notifier
 
 logger = logging.getLogger("exchange_client")
 
@@ -57,7 +58,6 @@ class UniversalExchangeClient:
             'options': {}
         }
 
-
         if settings.EXCHANGE_PASSWORD:
             config_params['password'] = settings.EXCHANGE_PASSWORD
 
@@ -83,7 +83,6 @@ class UniversalExchangeClient:
             except Exception:
                 pass
             logger.info(f"🌐 Modo REAL / Mainnet para {target_exchange_id.upper()} ACTIVADO.")
-
 
         try:
             await self.exchange.load_markets()
@@ -186,6 +185,31 @@ class UniversalExchangeClient:
             logger.error(f"Error al consultar balance de USDT en {self.exchange.id}: {e}")
             raise RuntimeError(f"Fallo al obtener balance de {self.exchange.id}: {e}")
 
+    async def get_all_open_positions(self) -> List[Dict[str, Any]]:
+        """
+        Consulta todas las posiciones activas en el exchange con saldo cargado (contracts > 0 o size > 0).
+        """
+        if not self.exchange:
+            await self.initialize()
+
+        try:
+            params = {}
+            if self.exchange.id == 'bybit':
+                params = {'type': 'linear'}
+            elif self.exchange.id in ['binance', 'binanceusdm']:
+                params = {'type': 'future'}
+
+            positions = await self.exchange.fetch_positions(params=params)
+            active_positions = []
+            for pos in positions:
+                contracts = float(pos.get('contracts', 0) or pos.get('positionAmt', 0) or pos.get('size', 0) or 0)
+                if abs(contracts) > 0:
+                    active_positions.append(pos)
+            return active_positions
+        except Exception as e:
+            logger.error(f"Error consultando posiciones activas en {self.exchange.id}: {e}")
+            return []
+
     async def get_open_position(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
         Consulta la posición abierta actual para el símbolo especificado.
@@ -196,7 +220,7 @@ class UniversalExchangeClient:
         try:
             positions = await self.exchange.fetch_positions([symbol])
             for pos in positions:
-                contracts = float(pos.get('contracts', 0) or pos.get('positionAmt', 0) or pos.get('size', 0))
+                contracts = float(pos.get('contracts', 0) or pos.get('positionAmt', 0) or pos.get('size', 0) or 0)
                 if abs(contracts) > 0:
                     side = pos.get('side', '').lower()
                     if not side or side == 'both':
@@ -204,8 +228,8 @@ class UniversalExchangeClient:
                     return {
                         'contracts': abs(contracts),
                         'side': side,
-                        'entryPrice': float(pos.get('entryPrice', 0) or pos.get('entry_price', 0)),
-                        'unrealizedPnl': float(pos.get('unrealizedPnl', 0) or pos.get('unrealisedPnl', 0)),
+                        'entryPrice': float(pos.get('entryPrice', 0) or pos.get('entry_price', 0) or 0),
+                        'unrealizedPnl': float(pos.get('unrealizedPnl', 0) or pos.get('unrealisedPnl', 0) or 0),
                         'info': pos
                     }
         except Exception as e:
@@ -231,12 +255,15 @@ class UniversalExchangeClient:
         logger.info(f"🔄 Cerrando posición existente {current_side.upper()} de {contracts} contratos en {symbol} ({self.exchange.id.upper()})...")
         try:
             formatted_amount = float(self.exchange.amount_to_precision(symbol, contracts))
+            params = {'reduceOnly': True}
+            if self.exchange.id == 'bybit':
+                params['positionIdx'] = 0
             order = await self.exchange.create_order(
                 symbol=symbol,
                 type='market',
                 side=close_side,
                 amount=formatted_amount,
-                params={'reduceOnly': True}
+                params=params
             )
             logger.info(f"✅ Posición previa en {symbol} cerrada con éxito.")
             return order
@@ -276,36 +303,91 @@ class UniversalExchangeClient:
 
         market_info = self.exchange.markets[norm_symbol]
 
-        # 2. Configurar margen y apalancamiento
-        await self.set_leverage_and_margin(norm_symbol, lev, m_mode)
-
-        # 3. Revisar y cerrar posición contraria o existente si aplica
+        # 2. Consultar posición abierta actual para este símbolo
         open_pos = await self.get_open_position(norm_symbol)
+
+        # 3. Manejo de señales de cierre y reversión/reducción
+        if action_clean == 'close':
+            if open_pos:
+                close_order = await self.close_position(norm_symbol)
+                return {
+                    "status": "closed",
+                    "symbol": norm_symbol,
+                    "action": "close",
+                    "exchange": self.exchange.id,
+                    "message": f"Posición cerrada en {norm_symbol}",
+                    "order": close_order
+                }
+            else:
+                return {
+                    "status": "closed",
+                    "symbol": norm_symbol,
+                    "action": "close",
+                    "exchange": self.exchange.id,
+                    "message": f"No hay posición abierta activa en {norm_symbol}"
+                }
+
+        # Si ya existe posición abierta para el par:
         if open_pos:
             current_side = open_pos['side']  # 'long' o 'short'
-            new_side = 'long' if action_clean == 'buy' else 'short' if action_clean == 'sell' else 'close'
+            # Si recibimos 'sell' teniendo un 'long': cerrar/reducir la posición Long
+            if action_clean == 'sell' and current_side == 'long':
+                logger.info(f"🔄 Señal SELL recibida con posición LONG abierta en {norm_symbol}. Cerrando posición LONG...")
+                close_order = await self.close_position(norm_symbol)
+                return {
+                    "status": "closed",
+                    "symbol": norm_symbol,
+                    "action": "sell",
+                    "side": "long",
+                    "exchange": self.exchange.id,
+                    "message": f"Posición LONG cerrada/reducida en {norm_symbol}",
+                    "order": close_order
+                }
+            # Si recibimos 'buy' teniendo un 'short': cerrar/reducir la posición Short
+            elif action_clean == 'buy' and current_side == 'short':
+                logger.info(f"🔄 Señal BUY recibida con posición SHORT abierta en {norm_symbol}. Cerrando posición SHORT...")
+                close_order = await self.close_position(norm_symbol)
+                return {
+                    "status": "closed",
+                    "symbol": norm_symbol,
+                    "action": "buy",
+                    "side": "short",
+                    "exchange": self.exchange.id,
+                    "message": f"Posición SHORT cerrada/reducida en {norm_symbol}",
+                    "order": close_order
+                }
+            elif (action_clean == 'buy' and current_side == 'long') or (action_clean == 'sell' and current_side == 'short'):
+                logger.info(f"ℹ️ Ya existe una posición {current_side.upper()} abierta en {norm_symbol}.")
 
-            if action_clean == 'close' or current_side != new_side:
-                await self.close_position(norm_symbol)
+        # 4. Verificación de MAX_OPEN_POSITIONS antes de abrir una nueva posición en un par no abierto
+        if not open_pos:
+            active_positions = await self.get_all_open_positions()
+            active_count = len(active_positions)
+            if active_count >= settings.MAX_OPEN_POSITIONS:
+                warn_msg = f"⚠️ Orden omitida para {norm_symbol}: Se alcanzó el límite máximo de {settings.MAX_OPEN_POSITIONS} posiciones abiertas."
+                logger.warning(warn_msg)
+                await notifier.send_message(warn_msg)
+                return {
+                    "status": "skipped",
+                    "symbol": norm_symbol,
+                    "action": action_clean,
+                    "exchange": self.exchange.id,
+                    "reason": f"Se alcanzó el límite máximo de {settings.MAX_OPEN_POSITIONS} posiciones abiertas.",
+                    "active_positions_count": active_count,
+                    "max_open_positions": settings.MAX_OPEN_POSITIONS
+                }
 
-        # Si la orden es simplemente para cerrar posición, finalizamos aquí
-        if action_clean == 'close':
-            return {
-                "status": "closed",
-                "symbol": norm_symbol,
-                "action": "close",
-                "exchange": self.exchange.id,
-                "message": f"Posición cerrada en {norm_symbol}"
-            }
+        # 5. Configurar margen y apalancamiento
+        await self.set_leverage_and_margin(norm_symbol, lev, m_mode)
 
-        # 4. Obtener precio actual de entrada mercado si no vino en el webhook
+        # 6. Obtener precio actual de entrada mercado si no vino en el webhook
         if not price or price <= 0:
             ticker = await self.exchange.fetch_ticker(norm_symbol)
             entry_price = float(ticker.get('last') or ticker.get('close') or 0.0)
         else:
             entry_price = float(price)
 
-        # 5. Obtener balance de USDT y calcular tamaño de posición
+        # 7. Obtener balance de USDT y calcular tamaño de posición
         balance_usdt = await self.get_usdt_balance()
         risk_result = risk_manager.calculate_position_size(
             usdt_balance=balance_usdt,
@@ -325,19 +407,7 @@ class UniversalExchangeClient:
         if amount_formatted < min_qty:
             amount_formatted = min_qty
 
-
-        # 6. Ejecutar orden a MERCADO
-        order_side = 'buy' if action_clean == 'buy' else 'sell'
-        logger.info(f"🚀 Ejecutando Orden Mercado {order_side.upper()} de {amount_formatted} contratos en {norm_symbol} ({self.exchange.id.upper()})...")
-
-        main_order = await self.exchange.create_order(
-            symbol=norm_symbol,
-            type='market',
-            side=order_side,
-            amount=amount_formatted
-        )
-
-        # 7. Calcular y colocar órdenes de Stop Loss y Take Profit
+        # 8. Calcular precios de Stop Loss y Take Profit
         sl_price, tp_price = risk_manager.calculate_sl_tp_prices(
             action=action_clean,
             entry_price=entry_price,
@@ -348,26 +418,45 @@ class UniversalExchangeClient:
         sl_formatted = float(self.exchange.price_to_precision(norm_symbol, sl_price))
         tp_formatted = float(self.exchange.price_to_precision(norm_symbol, tp_price))
 
-        opposite_side = 'sell' if order_side == 'buy' else 'buy'
-
+        # 9. Ejecutar orden a MERCADO (con SL/TP nativo en Bybit o condicionales en otros exchanges)
+        order_side = 'buy' if action_clean == 'buy' else 'sell'
         sl_order = None
         tp_order = None
 
-        # Estrategias adaptativas de Stop Loss para distintos exchanges (Bybit vs Binance vs Otros)
-        try:
-            if self.exchange.id == 'bybit':
-                sl_order = await self.exchange.create_order(
-                    symbol=norm_symbol,
-                    type='market',
-                    side=opposite_side,
-                    amount=amount_formatted,
-                    params={
-                        'stopPrice': sl_formatted,
-                        'triggerPrice': sl_formatted,
-                        'reduceOnly': True
-                    }
-                )
-            else:
+        if self.exchange.id == 'bybit':
+            logger.info(f"🚀 Ejecutando Orden Mercado {order_side.upper()} en BYBIT de {amount_formatted} contratos en {norm_symbol} con SL={sl_formatted} y TP={tp_formatted} nativos...")
+            order_params = {
+                'stopLoss': str(sl_formatted),
+                'takeProfit': str(tp_formatted),
+                'tpslMode': 'Full',
+                'positionIdx': 0
+            }
+            main_order = await self.exchange.create_order(
+                symbol=norm_symbol,
+                type='market',
+                side=order_side,
+                amount=amount_formatted,
+                params=order_params
+            )
+            try:
+                if hasattr(self.exchange, 'set_trading_stop'):
+                    await self.exchange.set_trading_stop(norm_symbol, stopLoss=sl_formatted, takeProfit=tp_formatted)
+            except Exception as e:
+                logger.debug(f"Nota en set_trading_stop Bybit: {e}")
+
+            logger.info(f"🛡️ Posición en {norm_symbol} iniciada con SL nativo=${sl_formatted} y TP nativo=${tp_formatted}")
+        else:
+            logger.info(f"🚀 Ejecutando Orden Mercado {order_side.upper()} de {amount_formatted} contratos en {norm_symbol} ({self.exchange.id.upper()})...")
+            main_order = await self.exchange.create_order(
+                symbol=norm_symbol,
+                type='market',
+                side=order_side,
+                amount=amount_formatted
+            )
+
+            opposite_side = 'sell' if order_side == 'buy' else 'buy'
+
+            try:
                 sl_order = await self.exchange.create_order(
                     symbol=norm_symbol,
                     type='STOP_MARKET',
@@ -378,24 +467,11 @@ class UniversalExchangeClient:
                         'reduceOnly': True
                     }
                 )
-            logger.info(f"🛡️ Stop Loss configurado a ${sl_formatted} en {norm_symbol}")
-        except Exception as e:
-            logger.error(f"Error al colocar Stop Loss en {norm_symbol} ({self.exchange.id}): {e}")
+                logger.info(f"🛡️ Stop Loss configurado a ${sl_formatted} en {norm_symbol}")
+            except Exception as e:
+                logger.error(f"Error al colocar Stop Loss en {norm_symbol} ({self.exchange.id}): {e}")
 
-        try:
-            if self.exchange.id == 'bybit':
-                tp_order = await self.exchange.create_order(
-                    symbol=norm_symbol,
-                    type='market',
-                    side=opposite_side,
-                    amount=amount_formatted,
-                    params={
-                        'stopPrice': tp_formatted,
-                        'triggerPrice': tp_formatted,
-                        'reduceOnly': True
-                    }
-                )
-            else:
+            try:
                 tp_order = await self.exchange.create_order(
                     symbol=norm_symbol,
                     type='TAKE_PROFIT_MARKET',
@@ -406,9 +482,9 @@ class UniversalExchangeClient:
                         'reduceOnly': True
                     }
                 )
-            logger.info(f"🎯 Take Profit configurado a ${tp_formatted} en {norm_symbol}")
-        except Exception as e:
-            logger.error(f"Error al colocar Take Profit en {norm_symbol} ({self.exchange.id}): {e}")
+                logger.info(f"🎯 Take Profit configurado a ${tp_formatted} en {norm_symbol}")
+            except Exception as e:
+                logger.error(f"Error al colocar Take Profit en {norm_symbol} ({self.exchange.id}): {e}")
 
         position_size_usdt = amount_formatted * entry_price
 
@@ -424,7 +500,7 @@ class UniversalExchangeClient:
             "margin_mode": m_mode,
             "sl_price": sl_formatted,
             "tp_price": tp_formatted,
-            "main_order_id": main_order.get("id"),
+            "main_order_id": main_order.get("id") if main_order else None,
             "sl_order_id": sl_order.get("id") if sl_order else None,
             "tp_order_id": tp_order.get("id") if tp_order else None
         }
